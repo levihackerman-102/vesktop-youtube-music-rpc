@@ -115,9 +115,28 @@ async function updateDiscordPresence(songData) {
             return;
         }
 
+        // Build status string with play/pause and repeat mode
+        let statusParts = [];
+        
+        // Add play/pause status
+        if (songData.isPlaying) {
+            statusParts.push('▶️ Playing');
+        } else {
+            statusParts.push('⏸️ Paused');
+        }
+        
+        // Add repeat mode
+        if (songData.repeatMode === 'one') {
+            statusParts.push('🔂 Repeat One');
+        } else if (songData.repeatMode === 'all') {
+            statusParts.push('🔁 Repeat All');
+        }
+        
+        const status = statusParts.join(' • ');
+        
         const activity = {
             details: songData.title,
-            state: `by ${songData.artist}`,
+            state: `${status} • ${songData.artist}`,
             instance: false,
         };
 
