@@ -114,11 +114,12 @@
                 title,
                 artist,
                 album,
-                thumbnail: thumbnail?.split('=')[0], // Remove size parameters
+                thumbnail: thumbnail?.split('=')[0],
                 isPlaying,
                 repeatMode,
                 duration,
                 currentTime,
+                captureTimestamp: Date.now(),
                 timestamp: Date.now()
             };
         } catch (err) {
@@ -158,19 +159,31 @@
     // Check for song changes
     function checkForUpdates() {
         const songData = getSongInfo();
-
         if (!songData) return;
 
-        // Check if song changed or play state changed
+        // Check if significant seek occurred (more than 2 seconds difference)
+        const timeDrift = lastSongData?.currentTime
+            ? Math.abs((songData.currentTime - lastSongData.currentTime) -
+                    ((songData.timestamp - lastSongData.timestamp) / 1000))
+            : 0;
+
+        const seekDetected = timeDrift > 2;
+
         const dataChanged = !lastSongData ||
             lastSongData.title !== songData.title ||
             lastSongData.isPlaying !== songData.isPlaying ||
-            lastSongData.repeatMode !== songData.repeatMode;
+            lastSongData.repeatMode !== songData.repeatMode ||
+            seekDetected;
 
         if (dataChanged) {
             console.log('[YTM-RPC] Song update:', songData);
+            if (seekDetected) console.log('[YTM-RPC] Seek detected, updating timestamps');
             sendSongData(songData);
             lastSongData = songData;
+
+            // Adjust check frequency based on play state
+            if (updateInterval) clearInterval(updateInterval);
+            updateInterval = setInterval(checkForUpdates, songData.isPlaying ? 1000 : 3000);
         }
     }
 
@@ -178,8 +191,8 @@
     console.log('[YTM-RPC] Userscript loaded');
     connectWebSocket();
 
-    // Check for updates every 2 seconds
-    setInterval(checkForUpdates, 2000);
+    // Check for updates with dynamic frequency
+    let updateInterval = setInterval(checkForUpdates, 1000);
 
     // Also check when URL changes (for navigation within YouTube Music)
     let lastUrl = location.href;

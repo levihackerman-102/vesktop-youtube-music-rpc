@@ -163,14 +163,38 @@ async function updateDiscordPresence(songData) {
             activity.smallImageText = 'Paused';
         }
 
-        // Add timestamps if playing
-        if (songData.isPlaying && songData.duration && songData.currentTime) {
+        // IMPROVED TIMESTAMP HANDLING
+        if (songData.isPlaying && songData.duration && songData.currentTime !== null) {
+            // Use the capture timestamp for more accurate calculation
+            const captureTime = songData.captureTimestamp || Date.now();
             const now = Date.now();
-            const elapsed = songData.currentTime * 1000;
+            
+            // Account for network delay between capture and now
+            const networkDelay = now - captureTime;
+            
+            // Calculate adjusted elapsed time
+            const elapsedSeconds = songData.currentTime + (networkDelay / 1000);
+            const elapsed = elapsedSeconds * 1000;
             const total = songData.duration * 1000;
             
-            activity.startTimestamp = now - elapsed;
-            activity.endTimestamp = now - elapsed + total;
+            // Don't set end timestamp if repeating one song (it's misleading)
+            if (songData.repeatMode === 'one') {
+                // Only show elapsed time, no end time
+                activity.startTimestamp = now - elapsed;
+                // Omit endTimestamp - Discord will show "XX:XX elapsed" instead of countdown
+            } else {
+                // Normal behavior: show progress bar
+                activity.startTimestamp = now - elapsed;
+                activity.endTimestamp = now - elapsed + total;
+            }
+            
+            console.log(`[Bridge] Timestamps set: elapsed=${elapsedSeconds.toFixed(1)}s, total=${songData.duration}s, delay=${networkDelay}ms`);
+        }
+        // Explicitly clear timestamps when paused
+        else if (!songData.isPlaying) {
+            // Don't set any timestamps when paused
+            delete activity.startTimestamp;
+            delete activity.endTimestamp;
         }
 
         await rpc.setActivity(activity);
