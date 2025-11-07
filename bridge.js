@@ -137,10 +137,10 @@ async function updateDiscordPresence(songData) {
         // Show play/pause status on its own line (details)
         // and put title + artist (+ album if available) on the second line (state)
         const activity = {
-            // Put play/pause status and title on the first line (details)
-            // and only the artist on the second line (state).
-            // Keep album in the image hover text (largeImageText) so it appears on hover only.
-            details: `${status} • ${songData.title}`,
+            // Show song title in details. Prefix with a visible emoji fallback
+            // (▶️ / ⏸️) so status remains visible even if the small image asset
+            // (corner overlay) is not present in the Discord app assets.
+            details: `${songData.isPlaying ? '▶️' : '⏸️'} ${songData.title}`,
             state: `${songData.artist}`,
             instance: false,
         };
