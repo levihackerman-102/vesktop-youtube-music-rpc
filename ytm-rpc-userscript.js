@@ -14,26 +14,45 @@
     let ws = null;
     let lastSongData = null;
 
+    let reconnectAttempts = 0;
+    const MAX_RECONNECT_DELAY = 30000; // Max 30 seconds between retries
+
     // Connect to the bridge server
     function connectWebSocket() {
         try {
-            ws = new WebSocket('ws://localhost:8080');
+            // Close existing connection if any
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+            }
 
+            ws = new WebSocket('ws://localhost:8080');
+            
             ws.onopen = () => {
                 console.log('[YTM-RPC] Connected to bridge server');
+                reconnectAttempts = 0; // Reset counter on successful connection
+                
+                // Send current song immediately on connect
+                const songData = getSongInfo();
+                if (songData) {
+                    sendSongData(songData);
+                }
             };
-
+            
             ws.onclose = () => {
-                console.log('[YTM-RPC] Disconnected, retrying in 5s...');
-                setTimeout(connectWebSocket, 5000);
+                reconnectAttempts++;
+                const delay = Math.min(5000 * reconnectAttempts, MAX_RECONNECT_DELAY);
+                console.log(`[YTM-RPC] Disconnected, retrying in ${delay/1000}s... (attempt ${reconnectAttempts})`);
+                setTimeout(connectWebSocket, delay);
             };
-
+            
             ws.onerror = (err) => {
                 console.error('[YTM-RPC] WebSocket error:', err);
             };
         } catch (err) {
             console.error('[YTM-RPC] Failed to connect:', err);
-            setTimeout(connectWebSocket, 5000);
+            reconnectAttempts++;
+            const delay = Math.min(5000 * reconnectAttempts, MAX_RECONNECT_DELAY);
+            setTimeout(connectWebSocket, delay);
         }
     }
 
@@ -45,11 +64,11 @@
             const thumbnail = document.querySelector('img.style-scope.ytmusic-player-bar')?.src;
             const playButton = document.querySelector('#play-pause-button');
             const isPlaying = playButton?.getAttribute('aria-label')?.includes('Pause');
-
+            
             // Parse artist and album from byline
             let artist = artistInfo || 'Unknown Artist';
             let album = null;
-
+            
             if (artistInfo?.includes('•')) {
                 const parts = artistInfo.split('•').map(s => s.trim());
                 artist = parts[0];
@@ -60,7 +79,7 @@
             const timeInfo = document.querySelector('.time-info.style-scope.ytmusic-player-bar');
             let duration = null;
             let currentTime = null;
-
+            
             if (timeInfo) {
                 const times = timeInfo.textContent.split('/').map(t => t.trim());
                 if (times.length === 2) {
@@ -114,11 +133,11 @@
     // Check for song changes
     function checkForUpdates() {
         const songData = getSongInfo();
-
+        
         if (!songData) return;
 
         // Check if song changed or play state changed
-        const dataChanged = !lastSongData ||
+        const dataChanged = !lastSongData || 
             lastSongData.title !== songData.title ||
             lastSongData.isPlaying !== songData.isPlaying;
 
@@ -132,10 +151,10 @@
     // Initialize
     console.log('[YTM-RPC] Userscript loaded');
     connectWebSocket();
-
+    
     // Check for updates every 2 seconds
     setInterval(checkForUpdates, 2000);
-
+    
     // Also check when URL changes (for navigation within YouTube Music)
     let lastUrl = location.href;
     new MutationObserver(() => {
