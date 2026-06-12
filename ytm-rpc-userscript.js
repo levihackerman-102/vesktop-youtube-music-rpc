@@ -25,7 +25,7 @@
                 ws.close();
             }
 
-            ws = new WebSocket('ws://localhost:8080');
+            ws = new WebSocket('ws://localhost:7080');
 
             ws.onopen = () => {
                 console.log('[YTM-RPC] Connected to bridge server');
@@ -62,13 +62,11 @@
             const title = document.querySelector('.title.style-scope.ytmusic-player-bar')?.textContent?.trim();
             const artistInfo = document.querySelector('.byline.style-scope.ytmusic-player-bar')?.textContent?.trim();
             const thumbnail = document.querySelector('img.style-scope.ytmusic-player-bar')?.src;
-            const playButton = document.querySelector('#play-pause-button');
 
-            // Check if playing - when playing, the button shows "Pause", when paused it shows "Play"
-            const ariaLabel = playButton?.getAttribute('aria-label') || playButton?.getAttribute('title') || '';
-            const isPlaying = ariaLabel.toLowerCase().includes('pause');
+            const videoEl = document.querySelector('video');
+            const isPlaying = videoEl ? !videoEl.paused && !videoEl.ended : false;
 
-            console.log('[YTM-RPC] Play button label:', ariaLabel, '| isPlaying:', isPlaying);
+            console.log('[YTM-RPC] isPlaying:', isPlaying);
 
             // Get repeat/loop status
             const repeatButton = document.querySelector('ytmusic-player-bar tp-yt-paper-icon-button.repeat');
@@ -95,17 +93,13 @@
                 album = parts[1];
             }
 
-            // Get duration and current time
-            const timeInfo = document.querySelector('.time-info.style-scope.ytmusic-player-bar');
+            // Get duration and current time directly from the video element
             let duration = null;
             let currentTime = null;
 
-            if (timeInfo) {
-                const times = timeInfo.textContent.split('/').map(t => t.trim());
-                if (times.length === 2) {
-                    currentTime = parseTime(times[0]);
-                    duration = parseTime(times[1]);
-                }
+            if (videoEl && !isNaN(videoEl.duration) && videoEl.duration > 0) {
+                currentTime = videoEl.currentTime;
+                duration = videoEl.duration;
             }
 
             if (!title) return null;
@@ -126,17 +120,6 @@
             console.error('[YTM-RPC] Error extracting song info:', err);
             return null;
         }
-    }
-
-    // Convert time string (MM:SS) to seconds
-    function parseTime(timeStr) {
-        const parts = timeStr.split(':').map(p => parseInt(p));
-        if (parts.length === 2) {
-            return parts[0] * 60 + parts[1];
-        } else if (parts.length === 3) {
-            return parts[0] * 3600 + parts[1] * 60 + parts[2];
-        }
-        return 0;
     }
 
     // Send song data to bridge server
@@ -167,7 +150,7 @@
                     ((songData.timestamp - lastSongData.timestamp) / 1000))
             : 0;
 
-        const seekDetected = timeDrift > 2;
+        const seekDetected = songData.isPlaying && timeDrift > 2;
 
         const dataChanged = !lastSongData ||
             lastSongData.title !== songData.title ||

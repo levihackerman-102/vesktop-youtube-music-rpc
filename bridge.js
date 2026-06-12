@@ -20,9 +20,9 @@ let reconnectAttempts = 0;
 const MAX_RECONNECT_DELAY = 60000; // Max 60 seconds
 
 // Start WebSocket server
-const wss = new WebSocket.Server({ port: 8080 });
+const wss = new WebSocket.Server({ port: 7080 });
 
-console.log('[Bridge] WebSocket server started on ws://localhost:8080');
+console.log('[Bridge] WebSocket server started on ws://localhost:7080');
 
 wss.on('connection', (ws) => {
     console.log('[Bridge] Client connected');
@@ -115,89 +115,47 @@ async function updateDiscordPresence(songData) {
             return;
         }
 
-        // Build status string with play/pause and repeat mode
-        let statusParts = [];
-        
-        // Add play/pause status
-        if (songData.isPlaying) {
-            statusParts.push('▶️ Playing');
-        } else {
-            statusParts.push('⏸️ Paused');
-        }
-        
-        // Add repeat mode
-        if (songData.repeatMode === 'one') {
-            statusParts.push('🔂 Repeat One');
-        } else if (songData.repeatMode === 'all') {
-            statusParts.push('🔁 Repeat All');
-        }
-        
-        const status = statusParts.join(' • ');
-        
-        // Show play/pause status on its own line (details)
-        // and put title + artist (+ album if available) on the second line (state)
-        const activity = {
-            // Show song title in details. Prefix with a visible emoji fallback
-            // (▶️ / ⏸️) so status remains visible even if the small image asset
-            // (corner overlay) is not present in the Discord app assets.
-            details: `${songData.isPlaying ? '▶️' : '⏸️'} ${songData.title}`,
-            state: `${songData.artist}`,
-            instance: false,
-        };
+        const largeImage = songData.thumbnail || 'ytmusic';
+        const largeText  = songData.album || 'YouTube Music';
 
-        // Use external image URL directly (supported by Discord now)
-        if (songData.thumbnail) {
-            activity.largeImageKey = songData.thumbnail;
-            activity.largeImageText = songData.album || 'YouTube Music';
-        } else {
-            activity.largeImageKey = 'ytmusic'; // Fallback to uploaded asset
-            activity.largeImageText = 'YouTube Music';
-        }
+        let stateText = songData.artist;
+        if (songData.repeatMode === 'one')  stateText += ' • 🔂';
+        else if (songData.repeatMode === 'all') stateText += ' • 🔁';
 
-        // Add play/pause indicator
-        if (songData.isPlaying) {
-            activity.smallImageKey = 'play';
-            activity.smallImageText = 'Playing';
-        } else {
-            activity.smallImageKey = 'pause';
-            activity.smallImageText = 'Paused';
-        }
-
-        // IMPROVED TIMESTAMP HANDLING
+        let timestamps = null;
         if (songData.isPlaying && songData.duration && songData.currentTime !== null) {
-            // Use the capture timestamp for more accurate calculation
-            const captureTime = songData.captureTimestamp || Date.now();
-            const now = Date.now();
-            
-            // Account for network delay between capture and now
-            const networkDelay = now - captureTime;
-            
-            // Calculate adjusted elapsed time
-            const elapsedSeconds = songData.currentTime + (networkDelay / 1000);
-            const elapsed = elapsedSeconds * 1000;
-            const total = songData.duration * 1000;
-            
-            // Don't set end timestamp if repeating one song (it's misleading)
-            if (songData.repeatMode === 'one') {
-                // Only show elapsed time, no end time
-                activity.startTimestamp = now - elapsed;
-                // Omit endTimestamp - Discord will show "XX:XX elapsed" instead of countdown
-            } else {
-                // Normal behavior: show progress bar
-                activity.startTimestamp = now - elapsed;
-                activity.endTimestamp = now - elapsed + total;
+            const now          = Date.now();
+            const networkDelay = now - (songData.captureTimestamp || now);
+            const elapsedMs    = (songData.currentTime + networkDelay / 1000) * 1000;
+            const startMs      = Math.floor(now - elapsedMs);
+            timestamps = { start: startMs };
+            if (songData.repeatMode !== 'one') {
+                timestamps.end = Math.floor(startMs + songData.duration * 1000);
             }
-            
-            console.log(`[Bridge] Timestamps set: elapsed=${elapsedSeconds.toFixed(1)}s, total=${songData.duration}s, delay=${networkDelay}ms`);
-        }
-        // Explicitly clear timestamps when paused
-        else if (!songData.isPlaying) {
-            // Don't set any timestamps when paused
-            delete activity.startTimestamp;
-            delete activity.endTimestamp;
+            console.log(`[Bridge] Timestamps set: elapsed=${(elapsedMs/1000).toFixed(1)}s, total=${songData.duration}s, delay=${networkDelay}ms`);
         }
 
-        await rpc.setActivity(activity);
+        if (!songData.isPlaying) {
+            // clearActivity wipes the previous timestamps; the immediate re-set
+            // then shows the paused activity with no timer at all.
+            await rpc.clearActivity();
+        }
+
+        await rpc.request('SET_ACTIVITY', {
+            pid: process.pid,
+            activity: {
+                details: songData.title,
+                state: songData.isPlaying ? stateText : `⏸️ Paused • ${stateText}`,
+                assets: {
+                    large_image: largeImage,
+                    large_text:  largeText,
+                    small_image: songData.isPlaying ? 'play' : 'pause',
+                    small_text:  songData.isPlaying ? 'Playing' : 'Paused',
+                },
+                ...(timestamps && { timestamps }),
+                instance: false,
+            },
+        });
         currentActivity = activity;
         console.log('[Bridge] Updated Discord presence with album art');
     } catch (err) {
