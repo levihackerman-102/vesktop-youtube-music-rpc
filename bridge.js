@@ -2,6 +2,8 @@
 // Install dependencies: npm install ws discord-rpc dotenv
 
 require('dotenv').config();
+const fs = require('fs');
+const { execSync } = require('child_process');
 const WebSocket = require('ws');
 const DiscordRPC = require('discord-rpc');
 
@@ -14,12 +16,76 @@ if (!CLIENT_ID) {
     process.exit(1);
 }
 
-const rpc = new DiscordRPC.Client({ transport: 'ipc' });
-let currentActivity = null;
-let reconnectAttempts = 0;
-const MAX_RECONNECT_DELAY = 60000; // Max 60 seconds
+// Optional: comma-separated list of non-Steam game process names to watch for.
+// e.g.  GAME_PROCESSES=cyberpunk2077,eldenring,minecraft
+const EXTRA_GAME_PROCESSES = (process.env.GAME_PROCESSES || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
 
-// Start WebSocket server
+const rpc = new DiscordRPC.Client({ transport: 'ipc' });
+let currentActivity = null;   // last song data sent to Discord
+let gamingMode = false;       // true while a game is detected
+let reconnectAttempts = 0;
+const MAX_RECONNECT_DELAY = 60000;
+
+// --- Game detection ---
+
+// Scans /proc for any process that has SteamAppId set (non-zero).
+// Works on both X11 and Wayland — no extra tools required.
+function isSteamGameRunning() {
+    try {
+        for (const entry of fs.readdirSync('/proc')) {
+            if (!/^\d+$/.test(entry)) continue;
+            try {
+                const environ = fs.readFileSync(`/proc/${entry}/environ`, 'utf8');
+                const match = environ.match(/SteamAppId=(\d+)/);
+                if (match && match[1] !== '0') return true;
+            } catch {
+                // Process ended or no permission — skip
+            }
+        }
+    } catch {
+        // /proc unavailable (non-Linux)
+    }
+    return false;
+}
+
+// Checks GAME_PROCESSES env var entries via pgrep.
+function isExtraGameRunning() {
+    if (EXTRA_GAME_PROCESSES.length === 0) return false;
+    try {
+        const pattern = EXTRA_GAME_PROCESSES.join('|');
+        const result = execSync(`pgrep -f "${pattern}" 2>/dev/null; true`).toString().trim();
+        return result.length > 0;
+    } catch {
+        return false;
+    }
+}
+
+function isGameRunning() {
+    return isSteamGameRunning() || isExtraGameRunning();
+}
+
+// Check every 5 seconds. Clears YTM activity while a game is running;
+// restores it automatically when the game closes.
+setInterval(async () => {
+    const gameDetected = isGameRunning();
+
+    if (gameDetected && !gamingMode) {
+        gamingMode = true;
+        console.log('[Bridge] Game detected — suspending YouTube Music RPC');
+        if (rpc?.user) await rpc.clearActivity().catch(() => {});
+
+    } else if (!gameDetected && gamingMode) {
+        gamingMode = false;
+        console.log('[Bridge] Game closed — resuming YouTube Music RPC');
+        if (currentActivity && rpc?.user) {
+            await updateDiscordPresence(currentActivity);
+        }
+    }
+}, 5000);
+
+// --- WebSocket server ---
+
 const wss = new WebSocket.Server({ port: 7080 });
 
 console.log('[Bridge] WebSocket server started on ws://localhost:7080');
@@ -31,7 +97,7 @@ wss.on('connection', (ws) => {
         try {
             const data = JSON.parse(message);
             console.log('[Bridge] Received:', data.title, '-', data.artist);
-            
+
             await updateDiscordPresence(data);
         } catch (err) {
             console.error('[Bridge] Error processing message:', err);
@@ -39,7 +105,9 @@ wss.on('connection', (ws) => {
     });
 
     ws.on('close', () => {
-        console.log('[Bridge] Client disconnected');
+        console.log('[Bridge] Client disconnected — clearing Discord activity');
+        currentActivity = null;
+        if (rpc?.user) rpc.clearActivity().catch(() => {});
     });
 });
 
@@ -47,7 +115,7 @@ wss.on('connection', (ws) => {
 rpc.on('ready', () => {
     console.log('[Bridge] Connected to Discord RPC');
     console.log('[Bridge] Logged in as:', rpc.user.username);
-    reconnectAttempts = 0; // Reset counter on successful connection
+    reconnectAttempts = 0;
 });
 
 rpc.on('disconnected', () => {
@@ -71,33 +139,29 @@ function reconnectToDiscord() {
     reconnectAttempts++;
     const delay = Math.min(5000 * reconnectAttempts, MAX_RECONNECT_DELAY);
     console.log(`[Bridge] Retrying Discord connection in ${delay/1000}s... (attempt ${reconnectAttempts})`);
-    
+
     setTimeout(() => {
         console.log('[Bridge] Attempting to reconnect to Discord...');
-        // Destroy old RPC instance and create new one
         try {
             rpc.destroy();
         } catch (e) {
             // Ignore errors when destroying
         }
-        
-        // Create new RPC client
+
         const newRpc = new DiscordRPC.Client({ transport: 'ipc' });
-        
-        // Copy event handlers
+
         newRpc.on('ready', () => {
             console.log('[Bridge] Connected to Discord RPC');
             console.log('[Bridge] Logged in as:', newRpc.user.username);
             reconnectAttempts = 0;
-            Object.assign(rpc, newRpc); // Replace old client
+            Object.assign(rpc, newRpc);
         });
-        
+
         newRpc.on('disconnected', () => {
             console.error('[Bridge] Disconnected from Discord RPC, attempting reconnect...');
             reconnectToDiscord();
         });
-        
-        // Try to login
+
         newRpc.login({ clientId: CLIENT_ID }).catch(err => {
             console.error('[Bridge] Reconnection failed:', err.message);
             reconnectToDiscord();
@@ -109,9 +173,14 @@ async function updateDiscordPresence(songData) {
     if (!rpc || !songData) return;
 
     try {
-        // Check if RPC is ready
         if (!rpc.user) {
             console.log('[Bridge] Discord RPC not ready, skipping update');
+            return;
+        }
+
+        // Don't override the game's activity slot while gaming
+        if (gamingMode) {
+            currentActivity = songData;
             return;
         }
 
@@ -156,11 +225,10 @@ async function updateDiscordPresence(songData) {
                 instance: false,
             },
         });
-        currentActivity = activity;
+        currentActivity = songData;
         console.log('[Bridge] Updated Discord presence with album art');
     } catch (err) {
         console.error('[Bridge] Failed to update presence:', err.message);
-        // If RPC connection is lost, try to reconnect
         if (err.message.includes('connection') || err.message.includes('RPC') || err.message.includes('ECONNREFUSED')) {
             console.log('[Bridge] RPC connection issue detected, reconnecting...');
             reconnectToDiscord();
