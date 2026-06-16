@@ -1,9 +1,9 @@
-# YouTube Music RPC — Windows Game Agent
+# YouTube Music RPC -- Windows Game Agent
 # Run this on your Windows gaming PC. It detects when a game is running
 # and notifies the bridge on your Linux PC to pause YouTube Music RPC.
 #
 # Requirements: Windows 10/11, PowerShell 5.1+
-# Usage: Right-click → "Run with PowerShell", or add it to your startup apps.
+# Usage: Right-click -> "Run with PowerShell", or add it to your startup apps.
 
 # ============================================================
 # CONFIGURATION
@@ -58,7 +58,6 @@ function Test-FullscreenGameRunning {
         $winW = $rect.Right - $rect.Left
         $winH = $rect.Bottom - $rect.Top
 
-        # Must fill the primary screen (covers both true fullscreen and borderless windowed).
         if ($winW -lt $screen.Width -or $winH -lt $screen.Height) { return $false }
 
         $procId = 0
@@ -104,7 +103,7 @@ function Send-Control($ws, $action) {
                   [System.Threading.CancellationToken]::None).Wait()
 }
 
-Write-Host "[Agent] YouTube Music RPC — Windows Game Agent"
+Write-Host "[Agent] YouTube Music RPC - Windows Game Agent"
 Write-Host "[Agent] Bridge: ${BridgeHost}:${BridgePort}  Poll: ${PollInterval}s"
 Write-Host "[Agent] Press Ctrl+C to stop."
 
@@ -119,15 +118,14 @@ while ($true) {
         while ($ws.State -eq 'Open') {
             $nowGame = Test-GameRunning
 
-            if ($nowGame -and -not $gameActive) {
+            if ($nowGame -and (-not $gameActive)) {
                 $gameActive = $true
                 Send-Control $ws 'game_start'
-                Write-Host "[Agent] $(Get-Date -Format 'HH:mm:ss') Game detected — bridge notified"
-
-            } elseif (-not $nowGame -and $gameActive) {
+                Write-Host ("[Agent] " + (Get-Date -Format 'HH:mm:ss') + " Game detected - bridge notified")
+            } elseif ((-not $nowGame) -and $gameActive) {
                 $gameActive = $false
                 Send-Control $ws 'game_stop'
-                Write-Host "[Agent] $(Get-Date -Format 'HH:mm:ss') Game closed — bridge notified"
+                Write-Host ("[Agent] " + (Get-Date -Format 'HH:mm:ss') + " Game closed - bridge notified")
             }
 
             Start-Sleep -Seconds $PollInterval
@@ -139,7 +137,7 @@ while ($true) {
         Write-Host "[Agent] Error: $_"
     }
 
-    Write-Host "[Agent] Reconnecting in ${backoffSeconds}s..."
+    Write-Host ("[Agent] Reconnecting in " + $backoffSeconds + "s...")
     Start-Sleep -Seconds $backoffSeconds
     $backoffSeconds = [Math]::Min($backoffSeconds * 2, 60)
 }
